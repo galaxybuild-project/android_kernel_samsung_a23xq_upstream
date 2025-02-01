@@ -2479,14 +2479,14 @@ static void mmc_blk_mq_dec_in_flight(struct mmc_queue *mq, enum mmc_issue_type i
 
 	spin_lock_irqsave(&mq->lock, flags);
 
-	mq->in_flight[mmc_issue_type(mq, req)] -= 1;
+	mq->in_flight[issue_type] -= 1;
 #if defined(CONFIG_SDC_QTI)
 	atomic_dec(&host->active_reqs);
 #endif
 	put_card = (mmc_tot_in_flight(mq) == 0);
-
+	
 	spin_unlock_irqrestore(&mq->lock, flags);
-
+	
 	if (put_card)
 		mmc_put_card(mq->card, &mq->ctx);
 }
