@@ -130,7 +130,7 @@ static int ip6_finish_output2(struct net *net, struct sock *sk, struct sk_buff *
 	if (lwtunnel_xmit_redirect(dst->lwtstate)) {
 		int res = lwtunnel_xmit(skb);
 
-		if (res != LWTUNNEL_XMIT_CONTINUE)
+		if (res < 0 || res == LWTUNNEL_XMIT_DONE)
 			return res;
 	}
 
@@ -177,13 +177,7 @@ ip6_finish_output_gso_slowpath_drop(struct net *net, struct sock *sk,
 		int err;
 
 		skb_mark_not_on_list(segs);
-		/* Last GSO segment can be smaller than gso_size (and MTU).
-		 * Adding a fragment header would produce an "atomic fragment",
-		 * which is considered harmful (RFC-8021). Avoid that.
-		 */
-		err = segs->len > mtu ?
-			ip6_fragment(net, sk, segs, ip6_finish_output2) :
-			ip6_finish_output2(net, sk, segs);
+		err = ip6_fragment(net, sk, segs, ip6_finish_output2);
 		if (err && ret == 0)
 			ret = err;
 	}
@@ -538,6 +532,7 @@ int ip6_forward(struct sk_buff *skb)
 			return 0;
 	}
 
+#if 0
 	/*
 	 *	check and decrement ttl
 	 */
@@ -550,6 +545,7 @@ int ip6_forward(struct sk_buff *skb)
 		kfree_skb(skb);
 		return -ETIMEDOUT;
 	}
+#endif
 
 	/* XXX: idev->cnf.proxy_ndp? */
 	if (net->ipv6.devconf_all->proxy_ndp &&
@@ -637,8 +633,9 @@ int ip6_forward(struct sk_buff *skb)
 	hdr = ipv6_hdr(skb);
 
 	/* Mangling hops number delayed to point after skb COW */
-
+#if 0
 	hdr->hop_limit--;
+#endif
 
 	return NF_HOOK(NFPROTO_IPV6, NF_INET_FORWARD,
 		       net, NULL, skb, skb->dev, dst->dev,
@@ -1425,7 +1422,7 @@ static int __ip6_append_data(struct sock *sk,
 	mtu = cork->gso_size ? IP6_MAX_MTU : cork->fragsize;
 	orig_mtu = mtu;
 
-	if (cork->tx_flags & SKBTX_ANY_TSTAMP &&
+	if (cork->tx_flags & SKBTX_ANY_SW_TSTAMP &&
 	    sk->sk_tsflags & SOF_TIMESTAMPING_OPT_ID)
 		tskey = sk->sk_tskey++;
 
@@ -1882,7 +1879,6 @@ int ip6_send_skb(struct sk_buff *skb)
 	struct rt6_info *rt = (struct rt6_info *)skb_dst(skb);
 	int err;
 
-	rcu_read_lock();
 	err = ip6_local_out(net, skb->sk, skb);
 	if (err) {
 		if (err > 0)
@@ -1892,7 +1888,6 @@ int ip6_send_skb(struct sk_buff *skb)
 				      IPSTATS_MIB_OUTDISCARDS);
 	}
 
-	rcu_read_unlock();
 	return err;
 }
 
