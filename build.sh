@@ -9,7 +9,8 @@
 [ -z $IS_CI ] && IS_CI=false
 [ -z $DO_CLEAN ] && DO_CLEAN=false
 [ -z $LTO ] && LTO=none
-[ -z $DEFAULT_KSU_REPO ] && DEFAULT_KSU_REPO="https://raw.githubusercontent.com/rsuntk/KernelSU/main/kernel/setup.sh"
+[ -z $DEFAULT_KSU_REPO ] && DEFAULT_KSU_REPO="https://raw.githubusercontent.com/rifsxd/KernelSU-Next/next/kernel/setup.sh"
+[ -z $SUSFS_SETUP_SCRIPT ] && SUSFS_SETUP_SCRIPT="https://raw.githubusercontent.com/galaxybuild-project/tools/refs/heads/main/Scripts/KernelSU-SuSFS.sh"
 [ -z $DEVICE ] && DEVICE="Unknown"
 
 # special rissu's path. linked to his toolchains
@@ -24,10 +25,21 @@ CONFIG_SECTION_MISMATCH_WARN_ONLY=y
 ARCH=arm64
 KCFLAGS=-w
 CONFIG_BUILD_ARM64_DT_OVERLAY=y
+CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3=y
 "
+
 export ARCH=arm64
 export CLANG_TRIPLE=aarch64-linux-gnu-
 export DTC_EXT=$(pwd)/tools/dtc
+export PROJECT_NAME="Wonderful-${PROJECT_VERSION}-${DEVICE}"
+export CLANG_VERSION_TEXT=$(clang --version | head -n 1)
+if [ "$SUSFS4KSU" = "true" ]; then
+    export LOCALVERSION="-wonderful-${PROJECT_VERSION}-SuSFS-qgki+"
+elif [ "$KERNELSU" = "true" ]; then
+    export LOCALVERSION="-wonderful-${PROJECT_VERSION}-Next-qgki+"
+else
+    export LOCALVERSION="-wonderful-${PROJECT_VERSION}-Vanilla-gki+"
+fi
 # end of default args
 
 strip() { # fmt: strip <module>
@@ -125,7 +137,7 @@ elif [[ "$1" = "dirty" ]]; then
 	else
 		pr_invalid $2
 	fi
-	make -j`echo $ALLOC_JOB` -C $(pwd) O=$(pwd)/out `echo $DEFAULT_ARGS`
+	make -j`echo $ALLOC_JOB` -C $(pwd) O=$(pwd)/out `echo $DEFAULT_ARGS` 
 elif [[ "$1" = "ak3" ]]; then
 	if [ $# -gt 1 ]; then
 		pr_err "Excess argument, only need one argument."
@@ -135,7 +147,12 @@ else
 	[ $# != 4 ] && usage;
 fi
 
-[ "$KERNELSU" = "true" ] && curl -LSs $DEFAULT_KSU_REPO | bash -s main || pr_info "KernelSU is disabled. Add 'KERNELSU=true' or 'export KERNELSU=true' to enable"
+
+if [ "$SUSFS4KSU" = "true" ]; then
+    curl -LSs $SUSFS_SETUP_SCRIPT | bash -s next
+else
+    [ "$KERNELSU" = "true" ] && curl -LSs $DEFAULT_KSU_REPO | bash -s next || pr_info "KernelSU Next is disabled. Add 'KERNELSU=true' or 'export KERNELSU=true' to enable"
+fi
 
 BUILD_TARGET="$1"
 FIRST_JOB="$2"
@@ -240,7 +257,15 @@ post_build() {
 	
 	AK3="$(pwd)/AnyKernel3"
 	DATE=$(date +'%Y%m%d%H%M%S')
-	ZIP_FMT="AnyKernel3-`echo $DEVICE`_$GITSHA-$DATE"
+	if [ "$SUSFS4KSU" = "true" ]; then
+		MOD="-SuSFS"
+	elif [ "$KERNELSU" = "true" ]; then
+		MOD="-Next"
+	else
+		MOD="-Vanilla"
+	fi
+	
+	ZIP_FMT="Anykernel3-${PROJECT_NAME}-${GITSHA}-${DATE}${MOD}"
 	
 	clone_ak3;
 	if [ -d $AK3 ]; then
@@ -266,7 +291,7 @@ post_build() {
 		cd ..
 		pr_err "Build done. Thanks for using this build script :)"
 	fi
-	
+
 	# LKM strip start!
 	mkdir ../kernel_obj_tmp && mkdir kernel_obj
         find $(pwd) -type f -name "*.ko" -exec mv {} ../kernel_obj_tmp \;
@@ -306,16 +331,35 @@ handle_lto() {
 # call summary
 pr_sum
 if [ "$BUILD" = "kernel" ]; then
-	make -j`echo $ALLOC_JOB` -C $(pwd) O=$(pwd)/out `echo $DEFAULT_ARGS` `echo $BUILD_DEFCONFIG`
-	[ "$KERNELSU" = "true" ] && setconfig enable KSU
-	[ "$LTO" != "none" ] && handle_lto || pr_info "LTO not set";
-	make -j`echo $ALLOC_JOB` -C $(pwd) O=$(pwd)/out `echo $DEFAULT_ARGS`
-	if [ -e $IMAGE ]; then
-		pr_post_build "completed"
-		post_build
-	else
-		pr_post_build "failed"
-	fi
-elif [ "$BUILD" = "defconfig" ]; then
-	make -j`echo $ALLOC_JOB` -C $(pwd) O=$(pwd)/out `echo $DEFAULT_ARGS` `echo $BUILD_DEFCONFIG`
+    echo "Building kernel"
+
+    # Initial defconfig build
+    make -j`echo $ALLOC_JOB` -C $(pwd) O=$(pwd)/out `echo $DEFAULT_ARGS` `echo $BUILD_DEFCONFIG`
+    
+    # Apply SuSFS-specific configurations before final build
+    if [ "$SUSFS4KSU" = "true" ]; then
+        echo "SuSFS enabled"
+        setconfig enable KSU
+        setconfig enable KSU_SUSFS
+        setconfig enable KSU_SUSFS_SUS_SU
+        setconfig enable KSU_SUSFS_HAS_MAGIC_MOUNT
+        setconfig enable KSU_SUSFS_SUS_OVERLAYFS
+        setconfig enable KSU_SUSFS_ENABLE_LOG
+    else
+        [ "$KERNELSU" = "true" ] && echo "KernelSU Enabled" && setconfig enable KSU
+    fi
+
+    # Apply LTO configuration if enabled
+    [ "$LTO" != "none" ] && handle_lto || pr_info "LTO not set"
+
+    # Final kernel build
+    make -j`echo $ALLOC_JOB` -C $(pwd) O=$(pwd)/out `echo $DEFAULT_ARGS`
+
+    # Check for successful build
+    if [ -e $IMAGE ]; then
+        pr_post_build "completed"
+        post_build
+    else
+        pr_post_build "failed"
+    fi
 fi
